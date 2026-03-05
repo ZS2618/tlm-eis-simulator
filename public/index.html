@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TLM-EIS Simulator</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <h1>TLM EIS Workbench</h1>
+        <p>调节传输线等效参数，实时预览 Li 电极在当前配置下的阻抗谱。</p>
+      </header>
+
+      <main class="layout">
+        <aside class="panel controls">
+          <section class="block">
+            <h2>模型</h2>
+            <div class="row">
+              <label for="presetSelect">预设</label>
+              <select id="presetSelect"></select>
+            </div>
+            <div class="button-row">
+              <button id="resetBtn" type="button">重置预设</button>
+              <button id="simulateBtn" class="primary" type="button">仿真</button>
+            </div>
+          </section>
+
+          <section class="block">
+            <h2>频率扫描</h2>
+            <div class="grid two">
+              <label>
+                f<sub>min</sub> (Hz)
+                <input id="freqMin" type="number" step="any" min="1e-6" />
+              </label>
+              <label>
+                f<sub>max</sub> (Hz)
+                <input id="freqMax" type="number" step="any" min="1e-6" />
+              </label>
+              <label class="span-2">
+                points / decade
+                <input id="ppd" type="number" step="1" min="2" max="60" />
+              </label>
+            </div>
+          </section>
+
+          <section id="regionsContainer" class="stack"></section>
+        </aside>
+
+        <section class="panel charts">
+          <section class="kpis" id="kpiRow"></section>
+          <section class="plot-card">
+            <h3>Nyquist</h3>
+            <div id="nyquistPlot" class="plot"></div>
+          </section>
+          <section class="plot-card">
+            <h3>Bode |Z|</h3>
+            <div id="bodeMagPlot" class="plot"></div>
+          </section>
+          <section class="plot-card">
+            <h3>Bode Phase</h3>
+            <div id="bodePhasePlot" class="plot"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
