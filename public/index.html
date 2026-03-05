@@ -46,6 +46,22 @@
             </div>
           </section>
 
+          <section class="block">
+            <h2>实测拟合</h2>
+            <div class="grid">
+              <label>
+                CSV 文件 (f, Re(Z), Im(Z))
+                <input id="csvInput" type="file" accept=".csv,.txt" />
+              </label>
+              <label>
+                拟合迭代次数
+                <input id="fitIterations" type="number" min="80" max="1200" step="20" value="220" />
+              </label>
+              <button id="fitBtn" type="button">自动拟合参数</button>
+              <div id="fitStatus" class="status-text">未导入实测数据</div>
+            </div>
+          </section>
+
           <section id="regionsContainer" class="stack"></section>
         </aside>
 

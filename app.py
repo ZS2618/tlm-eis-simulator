@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from tlm_model import PRESETS, normalize_preset, simulate_model
+from tlm_model import PRESETS, fit_model_to_data, normalize_preset, sensitivity_attribution, simulate_model
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8787"))
@@ -38,6 +38,9 @@ class AppHandler(BaseHTTPRequestHandler):
             return
 
         if path != "/api/simulate":
+            if path == "/api/fit":
+                self._handle_fit()
+                return
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
             return
 
@@ -56,7 +59,11 @@ class AppHandler(BaseHTTPRequestHandler):
             payload = json.loads(raw.decode("utf-8") or "{}")
             model_input = payload.get("model", payload) if isinstance(payload, dict) else None
             model = normalize_preset(model_input)
-            result = simulate_model(model)
+            include_sensitivity = bool(payload.get("includeSensitivity")) if isinstance(payload, dict) else False
+            if include_sensitivity:
+                result = sensitivity_attribution(model, float(payload.get("perturbation", 0.05)))
+            else:
+                result = simulate_model(model)
             self._send_json(HTTPStatus.OK, result)
         except json.JSONDecodeError as exc:
             self._send_json(HTTPStatus.BAD_REQUEST, {
@@ -66,6 +73,35 @@ class AppHandler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {
                 "error": "Simulation failed",
+                "details": str(exc),
+            })
+
+    def _handle_fit(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+
+        if length > 4 * 1024 * 1024:
+            self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "Payload too large"})
+            return
+
+        raw = self.rfile.read(length) if length > 0 else b""
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+            model_input = payload.get("model", payload) if isinstance(payload, dict) else None
+            points = payload.get("points", []) if isinstance(payload, dict) else []
+            iterations = int(payload.get("iterations", 220)) if isinstance(payload, dict) else 220
+            result = fit_model_to_data(model_input, points, iterations=iterations)
+            self._send_json(HTTPStatus.OK, result)
+        except json.JSONDecodeError as exc:
+            self._send_json(HTTPStatus.BAD_REQUEST, {
+                "error": "Failed to parse fit request",
+                "details": str(exc),
+            })
+        except Exception as exc:  # noqa: BLE001
+            self._send_json(HTTPStatus.BAD_REQUEST, {
+                "error": "Fitting failed",
                 "details": str(exc),
             })
 

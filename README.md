@@ -9,6 +9,7 @@
 - 预设模型：
   - `pristine`（对应论文 Figure 4 量级）
   - `dendritic`（对应论文 Figure 5 量级）
+  - `full_figure5`（Figure 5 扩展层级，包含更多传输子层）
 - 可调参数：
   - 频率范围、每 decade 采样点
   - 每个区域的 `R1/R2`、分布储能元件 `Q/alpha`
@@ -19,6 +20,9 @@
   - Bode 幅值
   - Bode 相位
   - HF 截距、低频实部、最大负虚部
+- 进阶能力：
+  - 导入实测 CSV（`f, Re(Z), Im(Z)`）并自动拟合参数
+  - 基于参数扰动敏感度的半圆归属标注（替代简单规则法）
 
 ## 启动
 
@@ -37,6 +41,13 @@ python3 app.py
 
 ### `POST /api/simulate`
 请求体可直接传模型对象，或 `{ "model": ... }`。
+可选字段：
+- `includeSensitivity: true` 返回敏感度归属结果
+- `perturbation` 设置扰动比例（默认 0.05）
+
+### `POST /api/fit`
+输入：模型初值 + 实测点数组  
+输出：拟合后的模型、目标函数、模拟/实测对齐数据
 
 示例：
 

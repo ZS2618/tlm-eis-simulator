@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import math
+import random
 from typing import Any
 
 DEFAULT_PRESETS = {
@@ -99,6 +100,84 @@ DEFAULT_PRESETS = {
                 "r2": 2.5,
                 "storage": {
                     "q": 9.5e-2,
+                    "alpha": 0.85,
+                },
+                "reaction": {
+                    "enabled": False,
+                    "r": 1,
+                    "q": 1e-9,
+                    "alpha": 1,
+                },
+            },
+        ],
+    },
+    "full_figure5": {
+        "name": "Full Figure-5 (Extended)",
+        "frequency": {
+            "minHz": 1e-3,
+            "maxHz": 1e6,
+            "pointsPerDecade": 10,
+        },
+        "regions": [
+            {
+                "key": "live_reactive",
+                "label": "Live Reactive",
+                "slices": 160,
+                "r1": 55,
+                "r2": 9,
+                "storage": {
+                    "q": 5.5e-2,
+                    "alpha": 0.95,
+                },
+                "reaction": {
+                    "enabled": True,
+                    "r": 8,
+                    "q": 7e-6,
+                    "alpha": 0.86,
+                },
+            },
+            {
+                "key": "live_transport",
+                "label": "Live Transport",
+                "slices": 120,
+                "r1": 22,
+                "r2": 6,
+                "storage": {
+                    "q": 2.5e-2,
+                    "alpha": 0.92,
+                },
+                "reaction": {
+                    "enabled": False,
+                    "r": 1,
+                    "q": 1e-9,
+                    "alpha": 1,
+                },
+            },
+            {
+                "key": "dead",
+                "label": "Dead Dendrite",
+                "slices": 120,
+                "r1": 42,
+                "r2": 5,
+                "storage": {
+                    "q": 0.5,
+                    "alpha": 0.75,
+                },
+                "reaction": {
+                    "enabled": False,
+                    "r": 1,
+                    "q": 1e-9,
+                    "alpha": 1,
+                },
+            },
+            {
+                "key": "separator",
+                "label": "Separator",
+                "slices": 120,
+                "r1": 18,
+                "r2": 3,
+                "storage": {
+                    "q": 0.1,
                     "alpha": 0.85,
                 },
                 "reaction": {
@@ -392,14 +471,7 @@ def _impedance_at_frequency(model: dict[str, Any], omega: float) -> complex:
     return _c_inv(i_in)
 
 
-def simulate_model(raw_input: dict[str, Any] | None) -> dict[str, Any]:
-    model = normalize_preset(raw_input)
-    frequencies = generate_frequencies(
-        model["frequency"]["minHz"],
-        model["frequency"]["maxHz"],
-        model["frequency"]["pointsPerDecade"],
-    )
-
+def _simulate_arrays(model: dict[str, Any], frequencies: list[float]) -> dict[str, list[float]]:
     z_real: list[float] = []
     z_imag: list[float] = []
     z_mag: list[float] = []
@@ -414,17 +486,224 @@ def simulate_model(raw_input: dict[str, Any] | None) -> dict[str, Any]:
         phase_deg.append(float(_c_arg_deg(z)))
 
     return {
-        "model": model,
-        "frequenciesHz": frequencies,
         "zReal": z_real,
         "zImag": z_imag,
         "zMag": z_mag,
         "phaseDeg": phase_deg,
-        "summary": {
-            "hfInterceptOhm": z_real[0],
-            "lfRealOhm": z_real[-1],
-            "maxNegImagOhm": max(-v for v in z_imag),
+    }
+
+
+def _summary_from_arrays(z_imag: list[float], z_real: list[float]) -> dict[str, float]:
+    return {
+        "hfInterceptOhm": z_real[0],
+        "lfRealOhm": z_real[-1],
+        "maxNegImagOhm": max(-v for v in z_imag),
+    }
+
+
+def _sanitize_frequencies(frequencies: list[float]) -> list[float]:
+    sanitized = [float(v) for v in frequencies if isinstance(v, (float, int)) and float(v) > 0]
+    if not sanitized:
+        return []
+    # Keep descending order to align with Nyquist display logic.
+    return sorted(sanitized, reverse=True)
+
+
+def simulate_model_with_frequencies(raw_input: dict[str, Any] | None, frequencies: list[float]) -> dict[str, Any]:
+    model = normalize_preset(raw_input)
+    freqs = _sanitize_frequencies(frequencies)
+    if not freqs:
+        freqs = generate_frequencies(
+            model["frequency"]["minHz"],
+            model["frequency"]["maxHz"],
+            model["frequency"]["pointsPerDecade"],
+        )
+    arrays = _simulate_arrays(model, freqs)
+    return {
+        "model": model,
+        "frequenciesHz": freqs,
+        **arrays,
+        "summary": _summary_from_arrays(arrays["zImag"], arrays["zReal"]),
+    }
+
+
+def _loss(meas_re: list[float], meas_im: list[float], pred_re: list[float], pred_im: list[float]) -> float:
+    total = 0.0
+    for mr, mi, pr, pi in zip(meas_re, meas_im, pred_re, pred_im):
+        scale = (mr * mr + mi * mi + 1.0)
+        dre = mr - pr
+        dim = mi - pi
+        total += (dre * dre + dim * dim) / scale
+    return total / max(len(meas_re), 1)
+
+
+def _build_fit_parameters(model: dict[str, Any]) -> list[tuple[int, str, float, float]]:
+    params: list[tuple[int, str, float, float]] = []
+    for idx, region in enumerate(model["regions"]):
+        params.append((idx, "r1", 1e-4, 1e6))
+        params.append((idx, "r2", 1e-4, 1e6))
+        params.append((idx, "storage.q", 1e-10, 1e2))
+        params.append((idx, "storage.alpha", 0.55, 1.0))
+        if region.get("reaction", {}).get("enabled"):
+            params.append((idx, "reaction.r", 1e-4, 1e6))
+            params.append((idx, "reaction.q", 1e-12, 1e1))
+            params.append((idx, "reaction.alpha", 0.55, 1.0))
+    return params
+
+
+def _get_param(model: dict[str, Any], region_idx: int, key: str) -> float:
+    region = model["regions"][region_idx]
+    if "." not in key:
+        return float(region[key])
+    a, b = key.split(".", 1)
+    return float(region[a][b])
+
+
+def _set_param(model: dict[str, Any], region_idx: int, key: str, value: float) -> None:
+    region = model["regions"][region_idx]
+    if "." not in key:
+        region[key] = float(value)
+        return
+    a, b = key.split(".", 1)
+    region[a][b] = float(value)
+
+
+def fit_model_to_data(raw_input: dict[str, Any] | None, measured_points: list[dict[str, float]], iterations: int = 220) -> dict[str, Any]:
+    model = normalize_preset(raw_input)
+    clean_points = [
+        p for p in measured_points
+        if isinstance(p, dict)
+        and isinstance(p.get("f"), (float, int))
+        and isinstance(p.get("zre"), (float, int))
+        and isinstance(p.get("zim"), (float, int))
+        and float(p.get("f")) > 0
+    ]
+    clean_points.sort(key=lambda p: float(p["f"]), reverse=True)
+
+    if len(clean_points) < 5:
+        raise ValueError("Need at least 5 valid measured points for fitting")
+
+    freqs = [float(p["f"]) for p in clean_points]
+    meas_re = [float(p["zre"]) for p in clean_points]
+    meas_im = [float(p["zim"]) for p in clean_points]
+
+    def evaluate(candidate_model: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+        pred = simulate_model_with_frequencies(candidate_model, freqs)
+        score = _loss(meas_re, meas_im, pred["zReal"], pred["zImag"])
+        return score, pred
+
+    best_model = _clone(model)
+    best_score, best_pred = evaluate(best_model)
+    params = _build_fit_parameters(best_model)
+
+    step = 0.45
+    max_iterations = int(_clamp(float(iterations), 80, 1200))
+
+    for _ in range(max_iterations):
+        improved = False
+        random.shuffle(params)
+
+        for region_idx, key, lo, hi in params:
+            current_val = _get_param(best_model, region_idx, key)
+            for direction in (-1.0, 1.0):
+                trial = _clone(best_model)
+                # Multiplicative in log-space, with slight randomization.
+                scale = 10 ** (direction * step * random.uniform(0.55, 1.0))
+                candidate = _clamp(current_val * scale, lo, hi)
+                _set_param(trial, region_idx, key, candidate)
+
+                score, pred = evaluate(trial)
+                if score < best_score:
+                    best_score = score
+                    best_model = trial
+                    best_pred = pred
+                    improved = True
+                    break
+            if improved:
+                continue
+
+        step = step * (0.92 if improved else 0.82)
+        if step < 0.012:
+            break
+
+    return {
+        "fittedModel": best_model,
+        "objective": best_score,
+        "simulated": best_pred,
+        "measured": {
+            "frequenciesHz": freqs,
+            "zReal": meas_re,
+            "zImag": meas_im,
         },
+    }
+
+
+def sensitivity_attribution(raw_input: dict[str, Any] | None, perturbation: float = 0.05) -> dict[str, Any]:
+    model = normalize_preset(raw_input)
+    base = simulate_model(raw_input)
+    region_count = len(model["regions"])
+
+    if region_count == 0:
+        base["sensitivity"] = {"dominantRegionIdx": [], "confidence": [], "regionPeakIndex": []}
+        return base
+
+    perturb = _clamp(float(perturbation), 0.005, 0.5)
+    per_region_deltas: list[list[float]] = []
+
+    for idx in range(region_count):
+        trial = _clone(model)
+        trial_region = trial["regions"][idx]
+        trial_region["r1"] *= 1.0 + perturb
+        trial_region["r2"] *= 1.0 + perturb
+        trial_region["storage"]["q"] *= 1.0 + perturb
+        if trial_region.get("reaction", {}).get("enabled"):
+            trial_region["reaction"]["q"] *= 1.0 + perturb
+            trial_region["reaction"]["r"] *= 1.0 + perturb
+
+        perturbed = simulate_model_with_frequencies(trial, base["frequenciesHz"])
+        delta = []
+        for br, bi, pr, pi in zip(base["zReal"], base["zImag"], perturbed["zReal"], perturbed["zImag"]):
+            delta.append(math.hypot(pr - br, pi - bi))
+        per_region_deltas.append(delta)
+
+    dominant_idx: list[int] = []
+    confidence: list[float] = []
+    y_ny = [-v for v in base["zImag"]]
+    region_peak_index: list[int] = [-1] * region_count
+
+    for i in range(len(base["frequenciesHz"])):
+        values = [per_region_deltas[r][i] for r in range(region_count)]
+        total = sum(values)
+        best = max(range(region_count), key=lambda r: values[r])
+        dominant_idx.append(best)
+        confidence.append(values[best] / total if total > 1e-30 else 0.0)
+
+    for region_idx in range(region_count):
+        candidates = [i for i, d in enumerate(dominant_idx) if d == region_idx]
+        if candidates:
+            region_peak_index[region_idx] = max(candidates, key=lambda i: y_ny[i])
+
+    base["sensitivity"] = {
+        "dominantRegionIdx": dominant_idx,
+        "confidence": confidence,
+        "regionPeakIndex": region_peak_index,
+    }
+    return base
+
+
+def simulate_model(raw_input: dict[str, Any] | None) -> dict[str, Any]:
+    model = normalize_preset(raw_input)
+    frequencies = generate_frequencies(
+        model["frequency"]["minHz"],
+        model["frequency"]["maxHz"],
+        model["frequency"]["pointsPerDecade"],
+    )
+    arrays = _simulate_arrays(model, frequencies)
+    return {
+        "model": model,
+        "frequenciesHz": frequencies,
+        **arrays,
+        "summary": _summary_from_arrays(arrays["zImag"], arrays["zReal"]),
     }
 
 
