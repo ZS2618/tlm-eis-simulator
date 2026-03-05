@@ -168,6 +168,81 @@ function updateKpis(summary) {
     .join('');
 }
 
+function estimateRegionPeakFrequency(region) {
+  const rTotal = Math.max(Number(region.r1) + Number(region.r2), 1e-12);
+  const q = Math.max(Number(region.storage?.q), 1e-12);
+  const tau = rTotal * q;
+  return 1 / (2 * Math.PI * Math.max(tau, 1e-18));
+}
+
+function findAttributionIndex(frequenciesHz, yNy, targetF) {
+  let nearest = 0;
+  let nearestErr = Infinity;
+  const targetLog = Math.log10(Math.max(targetF, 1e-12));
+
+  for (let i = 0; i < frequenciesHz.length; i += 1) {
+    const err = Math.abs(Math.log10(Math.max(frequenciesHz[i], 1e-12)) - targetLog);
+    if (err < nearestErr) {
+      nearestErr = err;
+      nearest = i;
+    }
+  }
+
+  const left = Math.max(0, nearest - 5);
+  const right = Math.min(yNy.length - 1, nearest + 5);
+  let best = nearest;
+  for (let i = left; i <= right; i += 1) {
+    if (yNy[i] > yNy[best]) {
+      best = i;
+    }
+  }
+  return best;
+}
+
+function buildNyquistAttribution(model, result) {
+  const colors = ['#d95a17', '#2058a8', '#0b7d61', '#7b3fe4', '#aa3a61'];
+  const yNy = result.zImag.map((v) => -v);
+  const markerX = [];
+  const markerY = [];
+  const markerText = [];
+  const markerMeta = [];
+  const annotations = [];
+
+  model.regions.forEach((region, idx) => {
+    const estimatedF = estimateRegionPeakFrequency(region);
+    const i = findAttributionIndex(result.frequenciesHz, yNy, estimatedF);
+    const label = region.label || region.key || `Region ${idx + 1}`;
+    const x = result.zReal[i];
+    const y = yNy[i];
+    const actualF = result.frequenciesHz[i];
+    const color = colors[idx % colors.length];
+
+    markerX.push(x);
+    markerY.push(y);
+    markerText.push(label);
+    markerMeta.push([label, estimatedF, actualF, result.zMag[i], result.phaseDeg[i]]);
+
+    annotations.push({
+      x,
+      y,
+      text: label,
+      showarrow: true,
+      arrowhead: 2,
+      arrowsize: 1,
+      arrowwidth: 1.2,
+      arrowcolor: color,
+      ax: 16 + (idx % 2) * 20,
+      ay: -24 - idx * 6,
+      bgcolor: 'rgba(255,255,255,0.86)',
+      bordercolor: color,
+      borderwidth: 1,
+      font: { size: 11, color: '#213335' }
+    });
+  });
+
+  return { markerX, markerY, markerText, markerMeta, annotations };
+}
+
 function renderPlots(result) {
   const xNy = result.zReal;
   const yNy = result.zImag.map((v) => -v);
@@ -176,6 +251,7 @@ function renderPlots(result) {
     result.zMag[i],
     result.phaseDeg[i]
   ]);
+  const attribution = buildNyquistAttribution(state.model, result);
 
   Plotly.newPlot(el.nyquistPlot, [
     {
@@ -192,6 +268,27 @@ function renderPlots(result) {
       mode: 'lines',
       line: { color: '#0b7d61', width: 2.2 },
       name: 'Nyquist'
+    },
+    {
+      x: attribution.markerX,
+      y: attribution.markerY,
+      text: attribution.markerText,
+      customdata: attribution.markerMeta,
+      mode: 'markers',
+      marker: {
+        size: 8,
+        color: '#ffffff',
+        line: { width: 2, color: '#24353a' }
+      },
+      hovertemplate:
+        'Region: %{customdata[0]}' +
+        '<br>f(est): %{customdata[1]:.3e} Hz' +
+        '<br>f(point): %{customdata[2]:.3e} Hz' +
+        '<br>|Z|: %{customdata[3]:.5g} Ω' +
+        '<br>Phase: %{customdata[4]:.3f}°' +
+        '<extra></extra>',
+      name: '归属点',
+      showlegend: false
     }
   ], {
     margin: { l: 58, r: 24, t: 8, b: 52 },
@@ -199,6 +296,7 @@ function renderPlots(result) {
     plot_bgcolor: 'white',
     xaxis: { title: 'Re(Z) / Ω', zeroline: false, gridcolor: '#e9efed' },
     yaxis: { title: '-Im(Z) / Ω', zeroline: false, gridcolor: '#e9efed' },
+    annotations: attribution.annotations,
     hovermode: 'closest'
   }, { responsive: true, displaylogo: false });
 
