@@ -10,7 +10,7 @@ from urllib.parse import unquote, urlparse
 
 from tlm_model import PRESETS, fit_model_to_data, normalize_preset, sensitivity_attribution, simulate_model
 
-HOST = "127.0.0.1"
+HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8787"))
 ROOT = Path(__file__).resolve().parent
 PUBLIC_DIR = ROOT / "public"
@@ -117,6 +117,10 @@ class AppHandler(BaseHTTPRequestHandler):
         self._serve_static(path, head_only=True)
 
     def _handle_api_get(self, path: str) -> None:
+        if path == "/api/healthz":
+            self._send_json(HTTPStatus.OK, {"status": "ok"})
+            return
+
         if path == "/api/presets":
             self._send_json(HTTPStatus.OK, {"presets": PRESETS})
             return
